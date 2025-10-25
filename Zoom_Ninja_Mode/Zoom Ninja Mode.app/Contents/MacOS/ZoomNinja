@@ -1,0 +1,61 @@
+#!/bin/bash
+# Zoom Ninja launcher - beginner friendly
+# Shows simple progress messages and falls back if sandbox-exec is missing.
+
+display() {
+  # Use AppleScript to show a simple alert for non-terminal users when needed
+  /usr/bin/osascript -e "display notification \"$1\" with title \"Zoom Ninja\""
+}
+
+echo "Zoom Ninja: starting..."
+display "Zoom Ninja starting…"
+
+# Find Wi-Fi interface name (typical: en0 or en1)
+WIFI_INTERFACE=$( /usr/sbin/networksetup -listallhardwareports | /usr/bin/awk '/Wi-Fi/{getline; print $2}' )
+ZOOM_PATH="/Applications/zoom.us.app/Contents/MacOS/Zoom"
+SANDBOX_PROFILE="$HOME/zoom-sandbox.sb"
+
+# 1. Quit Zoom
+echo "Closing Zoom..."
+killall zoom.us 2>/dev/null || true
+
+# 2. Clear Zoom cache
+echo "Clearing Zoom cache..."
+rm -rf "$HOME/Library/Application Support/zoom.us"
+rm -rf "$HOME/Library/Caches/us.zoom.xos"
+
+# 3. Spoof MAC address (requires admin password)
+if [ -n "$WIFI_INTERFACE" ]; then
+  RAND_MAC=$(/usr/bin/openssl rand -hex 6 | sed 's/\(..\)/\1:/g; s/:$//')
+  echo "Changing MAC on ${WIFI_INTERFACE} to ${RAND_MAC} (you will be asked for password)..."
+  /usr/bin/sudo /sbin/ifconfig "$WIFI_INTERFACE" ether "$RAND_MAC"
+else
+  echo "Could not detect Wi-Fi interface. Skipping MAC spoof."
+fi
+
+# 4. Restart Wi-Fi to apply change
+if [ -n "$WIFI_INTERFACE" ]; then
+  echo "Restarting Wi-Fi..."
+  /usr/sbin/networksetup -setairportpower "$WIFI_INTERFACE" off || true
+  sleep 2
+  /usr/sbin/networksetup -setairportpower "$WIFI_INTERFACE" on || true
+  sleep 2
+fi
+
+# 5. Create a minimal sandbox profile (very permissive)
+cat > "$SANDBOX_PROFILE" <<'SB'
+(version 1)
+(allow default)
+SB
+
+# 6. Launch Zoom inside sandbox if available, otherwise launch normally
+if [ -x /usr/bin/sandbox-exec ]; then
+  echo "Launching Zoom inside sandbox..."
+  /usr/bin/sandbox-exec -f "$SANDBOX_PROFILE" "$ZOOM_PATH" &>/dev/null &
+else
+  echo "sandbox-exec not found. Launching Zoom normally..."
+  "$ZOOM_PATH" &>/dev/null &
+fi
+
+display "Zoom Ninja finished."
+exit 0
